@@ -22,16 +22,41 @@ class FrontendStack(Stack):
             auto_delete_objects=True
         )
 
-        # Distribuição CloudFront (usando S3BucketOrigin em vez de S3Origin)
+        # Origin Access Control (OAC) - Mais seguro que OAI
+        oac = cloudfront.OriginAccessControl(self, "OAC",
+            origin_access_control_config=cloudfront.OriginAccessControlConfig(
+                name="S3OAC",
+                origin_type=cloudfront.OriginAccessControlOriginType.S3,
+                signing_behavior=cloudfront.OriginAccessControlSigningBehavior.ALWAYS,
+                signing_protocol=cloudfront.OriginAccessControlSigningProtocol.SIGV4
+            )
+        )
+
+        # Distribuição CloudFront com OAC
         self.distribution = cloudfront.Distribution(self, "FrontendDistribution",
             default_behavior=cloudfront.BehaviorOptions(
-                origin=origins.S3BucketOrigin(self.site_bucket),
+                origin=origins.S3BucketOrigin(
+                    bucket=self.site_bucket,
+                    origin_access_control=oac
+                ),
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             ),
             default_root_object="index.html"
         )
 
-        # Permissões para CI/CD
+        # Política do bucket S3 para permitir acesso do CloudFront via OAC
+        self.site_bucket.add_to_resource_policy(iam.PolicyStatement(
+            actions=["s3:GetObject"],
+            resources=[self.site_bucket.arn_for_objects("*")],
+            principals=[iam.ServicePrincipal("cloudfront.amazonaws.com")],
+            conditions={
+                "StringEquals": {
+                    "AWS:SourceArn": f"arn:aws:cloudfront::{self.account}:distribution/{self.distribution.distribution_id}"
+                }
+            }
+        ))
+
+        # Permissões para CI/CD (deploy de arquivos)
         self.site_bucket.grant_read_write(iam.AccountPrincipal(self.account))
 
         # Outputs para CI/CD
@@ -48,4 +73,9 @@ class FrontendStack(Stack):
         CfnOutput(self, "CloudFrontDistributionId",
             value=self.distribution.distribution_id,
             description="CloudFront distribution ID for invalidation"
+        )
+
+        CfnOutput(self, "CloudFrontURL",
+            value=f"https://{self.distribution.domain_name}",
+            description="Complete CloudFront URL"
         )
