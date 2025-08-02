@@ -41,9 +41,16 @@ class InfrastructureStack(Stack):
         gateway_sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(80), "HTTP")
         gateway_sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(443), "HTTPS")
 
-        # Key Pairs (substitua pelos nomes das suas key pairs)
-        fastapi_key_pair = ec2.KeyPair.from_key_pair_name(self, "FastAPIKeyPair", "chave-fastapi")
-        gateway_key_pair = ec2.KeyPair.from_key_pair_name(self, "GatewayKeyPair", "chave-gateway")
+        # Criar Key Pairs automaticamente
+        fastapi_key_pair = ec2.KeyPair(self, "FastAPIKeyPair",
+            key_pair_name="chave-fastapi",
+            type=ec2.KeyPairType.RSA
+        )
+        
+        gateway_key_pair = ec2.KeyPair(self, "GatewayKeyPair",
+            key_pair_name="chave-gateway",
+            type=ec2.KeyPairType.RSA
+        )
 
         # FastAPI EC2 Instance
         self.fastapi_instance = ec2.Instance(self, "FastAPIInstance",
@@ -85,4 +92,15 @@ class InfrastructureStack(Stack):
         CfnOutput(self, "GatewayPublicIP",
             value=self.gateway_instance.instance_public_ip,
             description="Gateway instance public IP"
+        )
+
+        # Outputs das Key Pairs
+        CfnOutput(self, "FastAPIKeyPairId",
+            value=fastapi_key_pair.key_pair_id,
+            description="FastAPI Key Pair ID"
+        )
+
+        CfnOutput(self, "GatewayKeyPairId",
+            value=gateway_key_pair.key_pair_id,
+            description="Gateway Key Pair ID"
         )
