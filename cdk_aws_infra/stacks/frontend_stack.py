@@ -22,26 +22,32 @@ class FrontendStack(Stack):
             auto_delete_objects=True
         )
 
-        # Origin Access Control (OAC) - Mais seguro que OAI
-        oac = cloudfront.OriginAccessControl(self, "OAC",
-            origin_access_control_config=cloudfront.OriginAccessControlConfig(
+        # Origin Access Control (OAC) usando CFN
+        oac = cloudfront.CfnOriginAccessControl(self, "OAC",
+            origin_access_control_config=cloudfront.CfnOriginAccessControl.OriginAccessControlConfigProperty(
                 name="S3OAC",
-                origin_type=cloudfront.OriginAccessControlOriginType.S3,
-                signing_behavior=cloudfront.OriginAccessControlSigningBehavior.ALWAYS,
-                signing_protocol=cloudfront.OriginAccessControlSigningProtocol.SIGV4
+                origin_access_control_origin_type="s3",
+                signing_behavior="always",
+                signing_protocol="sigv4"
             )
         )
 
-        # Distribuição CloudFront com OAC
+        # Distribuição CloudFront
         self.distribution = cloudfront.Distribution(self, "FrontendDistribution",
             default_behavior=cloudfront.BehaviorOptions(
-                origin=origins.S3BucketOrigin(
-                    bucket=self.site_bucket,
-                    origin_access_control=oac
-                ),
+                origin=origins.S3BucketOrigin(self.site_bucket),
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             ),
             default_root_object="index.html"
+        )
+
+        # Associar OAC à origem S3 usando escape hatch
+        cfn_distribution = self.distribution.node.default_child
+        cfn_distribution.add_property_override(
+            "DistributionConfig.Origins.0.OriginAccessControlId", oac.attr_id
+        )
+        cfn_distribution.add_property_override(
+            "DistributionConfig.Origins.0.S3OriginConfig.OriginAccessIdentity", ""
         )
 
         # Política do bucket S3 para permitir acesso do CloudFront via OAC
