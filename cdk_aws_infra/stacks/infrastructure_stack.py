@@ -2,6 +2,7 @@ from aws_cdk import (
     Stack,
     CfnOutput,
     aws_ec2 as ec2,
+    aws_ssm as ssm,
 )
 from constructs import Construct
 
@@ -50,6 +51,19 @@ class InfrastructureStack(Stack):
         gateway_key_pair = ec2.KeyPair(self, "GatewayKeyPair",
             key_pair_name="chave-gateway",
             type=ec2.KeyPairType.RSA
+        )
+
+        # Armazenar chaves privadas no SSM Parameter Store
+        ssm.StringParameter(self, "FastAPIPrivateKey",
+            parameter_name="/ec2/keypair/chave-fastapi/private",
+            string_value=fastapi_key_pair.private_key.to_string(),
+            description="FastAPI instance private key"
+        )
+
+        ssm.StringParameter(self, "GatewayPrivateKey",
+            parameter_name="/ec2/keypair/chave-gateway/private",
+            string_value=gateway_key_pair.private_key.to_string(),
+            description="Gateway instance private key"
         )
 
         # FastAPI EC2 Instance
@@ -103,4 +117,15 @@ class InfrastructureStack(Stack):
         CfnOutput(self, "GatewayKeyPairId",
             value=gateway_key_pair.key_pair_id,
             description="Gateway Key Pair ID"
+        )
+
+        # Outputs para acessar chaves privadas
+        CfnOutput(self, "FastAPIPrivateKeySSMPath",
+            value="/ec2/keypair/chave-fastapi/private",
+            description="SSM Parameter path for FastAPI private key"
+        )
+
+        CfnOutput(self, "GatewayPrivateKeySSMPath",
+            value="/ec2/keypair/chave-gateway/private",
+            description="SSM Parameter path for Gateway private key"
         )
