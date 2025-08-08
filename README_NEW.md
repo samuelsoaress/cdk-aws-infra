@@ -191,10 +191,10 @@ Faz upload das configurações Docker para S3:
 
 Após o deploy, os serviços estarão disponíveis em:
 
-- **FastAPI Swagger**: `http://<ALB-DNS>/swagger/api/docs` (FastAPI automático em `/docs`)
-- **Gateway Swagger**: `http://<ALB-DNS>/swagger/gw/api-docs` (configurado em `/api-docs`)
-- **FastAPI Health**: `http://<ALB-DNS>/swagger/api/docs`
-- **Gateway Health**: `http://<ALB-DNS>/swagger/gw/api-docs`
+- **FastAPI Swagger**: `http://<ALB-DNS>/swagger/api/docs`
+- **Gateway Swagger**: `http://<ALB-DNS>/swagger/gw/docs`
+- **FastAPI Health**: `http://<ALB-DNS>/swagger/api/health`
+- **Gateway Health**: `http://<ALB-DNS>/swagger/gw/health`
 
 ## 🔒 Security Groups
 
@@ -257,7 +257,7 @@ Document para garantir que os serviços Docker estejam sempre rodando.
 ## 📊 Monitoramento
 
 ### Health Checks
-- **ALB**: `/docs` e `/api-docs` endpoints para health checks
+- **ALB**: `/health` endpoint em cada serviço
 - **ASG**: ELB health check + auto recovery
 - **State Manager**: Execução periódica para auto-heal
 
@@ -308,7 +308,7 @@ aws ssm start-session --target $(aws ec2 describe-instances \
 
 #### Health Monitor Criando Issues Desnecessárias
 1. Ajustar thresholds no workflow
-2. Verificar se os endpoints `/docs` e `/api-docs` estão respondendo
+2. Verificar se os endpoints `/health` estão respondendo
 3. Considerar aumentar timeout dos health checks
 
 #### Instance Refresh Travado no CI/CD

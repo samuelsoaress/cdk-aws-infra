@@ -5,9 +5,82 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Deployment target'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+        - infrastructure
+        - frontend
+        - both
+        - configs-only
+        - refresh-only
+      instance_refresh:
+        description: 'Force instance refresh after deploy'
+        required: false
+        default: true
+        type: boolean
+      expose_swagger_public:
+        description: 'Expose Swagger publicly'
+        required: false
+        default: true
+        type: boolean
+      arch:
+        description: 'Instance architecture'
+        required: false
+        default: 'ARM_64'
+        type: choice
+        options:
+        - ARM_64
+        - X86_64
 
 jobs:
+  # Job para validação em PRs
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install CDK
+      run: npm install -g aws-cdk
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: CDK Synth
+      run: cdk synth
+
+    - name: CDK Diff (if credentials available)
+      if: env.AWS_ACCESS_KEY_ID != ''
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_REGION: ${{ secrets.AWS_REGION }}
+      run: |
+        aws-actions/configure-aws-credentials@v4
+        cdk diff || echo "No changes detected or stack not deployed"
+
+  # Job principal de deploy
   deploy:
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     
     steps:
@@ -39,6 +112,12 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
+    - name: Make scripts executable
+      run: |
+        chmod +x deploy.sh
+        chmod +x instance-refresh.sh
+        chmod +x upload-configs.sh
+
     - name: CDK Bootstrap (if needed)
       run: |
         cdk bootstrap || echo "Bootstrap already exists"
@@ -46,18 +125,111 @@ jobs:
     - name: CDK Synth
       run: cdk synth
 
+    # Deploy Frontend (se necessário)
     - name: CDK Deploy - Frontend
-      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      if: github.event.inputs.target == 'frontend' || github.event.inputs.target == 'both' || (github.event.inputs.target == '' && github.event_name == 'push')
       run: cdk deploy FrontendStack --require-approval never
 
+    # Deploy Infrastructure com parâmetros
     - name: CDK Deploy - Infrastructure
-      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-      run: cdk deploy InfrastructureStack --require-approval never
-
-    - name: Get Stack Outputs
-      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      if: github.event.inputs.target == 'infrastructure' || github.event.inputs.target == 'both' || (github.event.inputs.target == '' && github.event_name == 'push')
       run: |
-        echo "=== Frontend Stack Outputs ==="
-        aws cloudformation describe-stacks --stack-name FrontendStack --query 'Stacks[0].Outputs' --output table
-        echo "=== Infrastructure Stack Outputs ==="
-        aws cloudformation describe-stacks --stack-name InfrastructureStack --query 'Stacks[0].Outputs' --output table
+        CONTEXT_ARGS=""
+        
+        # Configurar context args baseado nos inputs
+        if [ "${{ github.event.inputs.expose_swagger_public }}" != "" ]; then
+          CONTEXT_ARGS="$CONTEXT_ARGS -c expose_swagger_public=${{ github.event.inputs.expose_swagger_public }}"
+        fi
+        
+        if [ "${{ github.event.inputs.arch }}" != "" ]; then
+          CONTEXT_ARGS="$CONTEXT_ARGS -c arch=${{ github.event.inputs.arch }}"
+        fi
+        
+        echo "Context args: $CONTEXT_ARGS"
+        
+        if [ -n "$CONTEXT_ARGS" ]; then
+          cdk deploy InfrastructureStack $CONTEXT_ARGS --require-approval never
+        else
+          cdk deploy InfrastructureStack --require-approval never
+        fi
+
+    # Upload de configurações Docker
+    - name: Upload Docker Configurations
+      if: github.event.inputs.target != 'frontend' && github.event.inputs.target != 'refresh-only'
+      run: |
+        echo "Uploading Docker configurations to S3..."
+        ./upload-configs.sh
+
+    # Aguardar infraestrutura estar pronta
+    - name: Wait for infrastructure to be ready
+      if: github.event.inputs.target == 'infrastructure' || github.event.inputs.target == 'both' || (github.event.inputs.target == '' && github.event_name == 'push')
+      run: |
+        echo "Waiting 60s for infrastructure to be ready..."
+        sleep 60
+
+    # Instance Refresh (se solicitado)
+    - name: Instance Refresh
+      if: |
+        (github.event.inputs.instance_refresh == 'true' || github.event.inputs.target == 'refresh-only' || 
+         (github.event.inputs.instance_refresh == '' && github.event_name == 'push')) &&
+        github.event.inputs.target != 'frontend'
+      run: |
+        echo "Starting instance refresh..."
+        ./instance-refresh.sh both
+
+    # Verificar status dos serviços
+    - name: Check Service Status
+      if: github.event.inputs.target != 'frontend'
+      run: |
+        echo "Checking service status..."
+        ./deploy.sh status || echo "Status check failed, but continuing..."
+
+    # Obter outputs das stacks
+    - name: Get Stack Outputs
+      run: |
+        echo "=== Stack Information ==="
+        ./deploy.sh info || echo "Could not get stack info"
+        
+        echo ""
+        echo "=== Detailed Outputs ==="
+        
+        if aws cloudformation describe-stacks --stack-name FrontendStack &>/dev/null; then
+          echo "=== Frontend Stack Outputs ==="
+          aws cloudformation describe-stacks --stack-name FrontendStack --query 'Stacks[0].Outputs' --output table
+        fi
+        
+        if aws cloudformation describe-stacks --stack-name InfrastructureStack &>/dev/null; then
+          echo "=== Infrastructure Stack Outputs ==="
+          aws cloudformation describe-stacks --stack-name InfrastructureStack --query 'Stacks[0].Outputs' --output table
+        fi
+
+    # Criar summary do deploy
+    - name: Create Deploy Summary
+      run: |
+        echo "## 🚀 Deploy Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # URLs dos serviços
+        ALB_DNS=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='SwaggerAlbDnsName'].OutputValue" --output text 2>/dev/null || echo "")
+        
+        if [ -n "$ALB_DNS" ]; then
+          echo "### 🌐 Service URLs" >> $GITHUB_STEP_SUMMARY
+          echo "- **FastAPI Swagger**: http://$ALB_DNS/swagger/api/docs" >> $GITHUB_STEP_SUMMARY
+          echo "- **Gateway Swagger**: http://$ALB_DNS/swagger/gw/api-docs" >> $GITHUB_STEP_SUMMARY
+          echo "- **FastAPI Health**: http://$ALB_DNS/swagger/api/docs" >> $GITHUB_STEP_SUMMARY
+          echo "- **Gateway Health**: http://$ALB_DNS/swagger/gw/api-docs" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Frontend URL
+        FRONTEND_URL=$(aws cloudformation describe-stacks --stack-name FrontendStack --query "Stacks[0].Outputs[?OutputKey=='CloudFrontURL'].OutputValue" --output text 2>/dev/null || echo "")
+        
+        if [ -n "$FRONTEND_URL" ]; then
+          echo "- **Frontend**: $FRONTEND_URL" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### ⚙️ Deploy Parameters" >> $GITHUB_STEP_SUMMARY
+        echo "- **Target**: ${{ github.event.inputs.target || 'both' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Architecture**: ${{ github.event.inputs.arch || 'ARM_64' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Swagger Public**: ${{ github.event.inputs.expose_swagger_public || 'true' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Instance Refresh**: ${{ github.event.inputs.instance_refresh || 'true' }}" >> $GITHUB_STEP_SUMMARY

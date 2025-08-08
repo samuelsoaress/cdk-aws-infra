@@ -1,0 +1,270 @@
+name: Health Monitor
+
+on:
+  schedule:
+    # Run every 30 minutes during business hours (9 AM to 6 PM UTC)
+    - cron: '*/30 9-18 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      detailed_check:
+        description: 'Perform detailed health check'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Make scripts executable
+      run: |
+        chmod +x deploy.sh
+
+    - name: Basic Health Check
+      id: health
+      run: |
+        echo "🔍 Performing health check..."
+        
+        # Get ALB DNS
+        ALB_DNS=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='SwaggerAlbDnsName'].OutputValue" --output text 2>/dev/null || echo "")
+        
+        if [ -z "$ALB_DNS" ]; then
+          echo "❌ Infrastructure stack not found or ALB not available"
+          echo "stack_status=missing" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+        
+        echo "ALB DNS: $ALB_DNS"
+        
+        # Check FastAPI
+        echo "Checking FastAPI..."
+        if curl -s -f "http://$ALB_DNS/swagger/api/docs" >/dev/null 2>&1; then
+          echo "✅ FastAPI is healthy"
+          echo "fastapi_status=healthy" >> $GITHUB_OUTPUT
+        else
+          echo "❌ FastAPI is not responding"
+          echo "fastapi_status=unhealthy" >> $GITHUB_OUTPUT
+        fi
+        
+        # Check Gateway
+        echo "Checking Gateway..."
+        if curl -s -f "http://$ALB_DNS/swagger/gw/api-docs" >/dev/null 2>&1; then
+          echo "✅ Gateway is healthy"
+          echo "gateway_status=healthy" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Gateway is not responding"
+          echo "gateway_status=unhealthy" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
+
+    - name: Detailed Infrastructure Check
+      if: github.event.inputs.detailed_check == 'true' || steps.health.outputs.fastapi_status == 'unhealthy' || steps.health.outputs.gateway_status == 'unhealthy'
+      run: |
+        echo "🔧 Performing detailed infrastructure check..."
+        
+        # Check ASG health
+        FASTAPI_ASG=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='FastAPIASGName'].OutputValue" --output text 2>/dev/null || echo "")
+        GATEWAY_ASG=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='GatewayASGName'].OutputValue" --output text 2>/dev/null || echo "")
+        
+        if [ -n "$FASTAPI_ASG" ]; then
+          echo "FastAPI ASG Status:"
+          aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$FASTAPI_ASG" --query "AutoScalingGroups[0].[AutoScalingGroupName, DesiredCapacity, Instances[*].[InstanceId, LifecycleState, HealthStatus]]" --output table
+        fi
+        
+        if [ -n "$GATEWAY_ASG" ]; then
+          echo "Gateway ASG Status:"
+          aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$GATEWAY_ASG" --query "AutoScalingGroups[0].[AutoScalingGroupName, DesiredCapacity, Instances[*].[InstanceId, LifecycleState, HealthStatus]]" --output table
+        fi
+        
+        # Check Target Group health
+        FASTAPI_TG=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='FastAPITargetGroupArn'].OutputValue" --output text 2>/dev/null || echo "")
+        GATEWAY_TG=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='GatewayTargetGroupArn'].OutputValue" --output text 2>/dev/null || echo "")
+        
+        if [ -n "$FASTAPI_TG" ]; then
+          echo "FastAPI Target Group Health:"
+          aws elbv2 describe-target-health --target-group-arn "$FASTAPI_TG" --output table
+        fi
+        
+        if [ -n "$GATEWAY_TG" ]; then
+          echo "Gateway Target Group Health:"
+          aws elbv2 describe-target-health --target-group-arn "$GATEWAY_TG" --output table
+        fi
+
+    - name: Auto Recovery Attempt
+      if: steps.health.outputs.fastapi_status == 'unhealthy' || steps.health.outputs.gateway_status == 'unhealthy'
+      run: |
+        echo "🔄 Attempting auto recovery..."
+        
+        # Try to run SSM State Manager document
+        FASTAPI_ASG=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='FastAPIASGName'].OutputValue" --output text 2>/dev/null || echo "")
+        GATEWAY_ASG=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='GatewayASGName'].OutputValue" --output text 2>/dev/null || echo "")
+        
+        # Get instance IDs
+        if [ -n "$FASTAPI_ASG" ] && [ "${{ steps.health.outputs.fastapi_status }}" == "unhealthy" ]; then
+          FASTAPI_INSTANCE=$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$FASTAPI_ASG" --query "AutoScalingGroups[0].Instances[0].InstanceId" --output text)
+          if [ -n "$FASTAPI_INSTANCE" ] && [ "$FASTAPI_INSTANCE" != "None" ]; then
+            echo "Triggering auto-heal for FastAPI instance: $FASTAPI_INSTANCE"
+            aws ssm send-command --instance-ids "$FASTAPI_INSTANCE" --document-name "AWS-RunShellScript" --parameters 'commands=["cd /opt/app && docker-compose down && docker-compose up -d"]' || echo "Failed to send command"
+          fi
+        fi
+        
+        if [ -n "$GATEWAY_ASG" ] && [ "${{ steps.health.outputs.gateway_status }}" == "unhealthy" ]; then
+          GATEWAY_INSTANCE=$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$GATEWAY_ASG" --query "AutoScalingGroups[0].Instances[0].InstanceId" --output text)
+          if [ -n "$GATEWAY_INSTANCE" ] && [ "$GATEWAY_INSTANCE" != "None" ]; then
+            echo "Triggering auto-heal for Gateway instance: $GATEWAY_INSTANCE"
+            aws ssm send-command --instance-ids "$GATEWAY_INSTANCE" --document-name "AWS-RunShellScript" --parameters 'commands=["cd /opt/gateway && docker-compose down && docker-compose up -d"]' || echo "Failed to send command"
+          fi
+        fi
+        
+        echo "⏳ Waiting 2 minutes for recovery..."
+        sleep 120
+
+    - name: Re-check After Recovery
+      if: steps.health.outputs.fastapi_status == 'unhealthy' || steps.health.outputs.gateway_status == 'unhealthy'
+      id: recheck
+      run: |
+        echo "🔍 Re-checking health after recovery attempt..."
+        
+        ALB_DNS="${{ steps.health.outputs.alb_dns }}"
+        
+        # Re-check FastAPI
+        if [ "${{ steps.health.outputs.fastapi_status }}" == "unhealthy" ]; then
+          if curl -s -f "http://$ALB_DNS/swagger/api/docs" >/dev/null 2>&1; then
+            echo "✅ FastAPI recovered successfully"
+            echo "fastapi_recovered=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ FastAPI still unhealthy after recovery attempt"
+            echo "fastapi_recovered=false" >> $GITHUB_OUTPUT
+          fi
+        fi
+        
+        # Re-check Gateway
+        if [ "${{ steps.health.outputs.gateway_status }}" == "unhealthy" ]; then
+          if curl -s -f "http://$ALB_DNS/swagger/gw/api-docs" >/dev/null 2>&1; then
+            echo "✅ Gateway recovered successfully"
+            echo "gateway_recovered=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Gateway still unhealthy after recovery attempt"
+            echo "gateway_recovered=false" >> $GITHUB_OUTPUT
+          fi
+        fi
+
+    - name: Create Health Report
+      run: |
+        echo "## 🏥 Health Monitor Report" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Timestamp**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Service Status
+        echo "### 🔍 Service Status" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ steps.health.outputs.fastapi_status }}" == "healthy" ]; then
+          echo "- **FastAPI**: ✅ Healthy" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- **FastAPI**: ❌ Unhealthy" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ steps.health.outputs.gateway_status }}" == "healthy" ]; then
+          echo "- **Gateway**: ✅ Healthy" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- **Gateway**: ❌ Unhealthy" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Recovery Results (if applicable)
+        if [ "${{ steps.health.outputs.fastapi_status }}" == "unhealthy" ] || [ "${{ steps.health.outputs.gateway_status }}" == "unhealthy" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔄 Auto Recovery Results" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.recheck.outputs.fastapi_recovered }}" == "true" ]; then
+            echo "- **FastAPI**: ✅ Recovered successfully" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.recheck.outputs.fastapi_recovered }}" == "false" ]; then
+            echo "- **FastAPI**: ❌ Recovery failed - manual intervention required" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ steps.recheck.outputs.gateway_recovered }}" == "true" ]; then
+            echo "- **Gateway**: ✅ Recovered successfully" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.recheck.outputs.gateway_recovered }}" == "false" ]; then
+            echo "- **Gateway**: ❌ Recovery failed - manual intervention required" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
+        
+        # URLs
+        if [ -n "${{ steps.health.outputs.alb_dns }}" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌐 Service URLs" >> $GITHUB_STEP_SUMMARY
+          echo "- **FastAPI Health**: http://${{ steps.health.outputs.alb_dns }}/swagger/api/docs" >> $GITHUB_STEP_SUMMARY
+          echo "- **Gateway Health**: http://${{ steps.health.outputs.alb_dns }}/swagger/gw/api-docs" >> $GITHUB_STEP_SUMMARY
+          echo "- **FastAPI Swagger**: http://${{ steps.health.outputs.alb_dns }}/swagger/api/docs" >> $GITHUB_STEP_SUMMARY
+          echo "- **Gateway Swagger**: http://${{ steps.health.outputs.alb_dns }}/swagger/gw/api-docs" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    # Create issue if services are still unhealthy after recovery
+    - name: Create Issue for Failed Recovery
+      if: steps.recheck.outputs.fastapi_recovered == 'false' || steps.recheck.outputs.gateway_recovered == 'false'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = `🚨 Health Monitor Alert - Service Recovery Failed`;
+          const body = `
+          ## Health Monitor Alert
+          
+          **Timestamp**: ${new Date().toISOString()}
+          
+          ### Failed Services
+          ${context.payload.inputs && context.payload.inputs.fastapi_recovered === 'false' ? '- ❌ FastAPI - Auto recovery failed' : ''}
+          ${context.payload.inputs && context.payload.inputs.gateway_recovered === 'false' ? '- ❌ Gateway - Auto recovery failed' : ''}
+          
+          ### Manual Actions Required
+          1. Check the workflow run logs: [${context.workflow}](${context.server_url}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})
+          2. Consider running manual recovery: \`./deploy.sh refresh both\`
+          3. Check instance logs via Session Manager
+          
+          ### Quick Actions
+          - [Run Instance Refresh](${context.server_url}/${context.repo.owner}/${context.repo.repo}/actions/workflows/maintenance.yml)
+          - [Check Status](${context.server_url}/${context.repo.owner}/${context.repo.repo}/actions/workflows/maintenance.yml)
+          
+          This issue was created automatically by the Health Monitor workflow.
+          `;
+          
+          // Check if similar issue already exists
+          const issues = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            labels: ['health-monitor', 'alert']
+          });
+          
+          const existingIssue = issues.data.find(issue => 
+            issue.title.includes('Health Monitor Alert')
+          );
+          
+          if (!existingIssue) {
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['health-monitor', 'alert', 'bug']
+            });
+          } else {
+            // Update existing issue with new information
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: existingIssue.number,
+              body: `**New Health Monitor Alert**: ${new Date().toISOString()}\n\n${body}`
+            });
+          }

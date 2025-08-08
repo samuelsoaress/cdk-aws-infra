@@ -1,0 +1,170 @@
+name: Infrastructure Maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Maintenance action to perform'
+        required: true
+        type: choice
+        options:
+        - instance-refresh
+        - upload-configs
+        - status-check
+        - emergency-stop
+        - emergency-start
+      target:
+        description: 'Target for instance operations'
+        required: false
+        default: 'both'
+        type: choice
+        options:
+        - fastapi
+        - gateway
+        - both
+      force:
+        description: 'Force operation (cancels running operations)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Make scripts executable
+      run: |
+        chmod +x deploy.sh
+        chmod +x instance-refresh.sh
+        chmod +x upload-configs.sh
+
+    # Instance Refresh
+    - name: Instance Refresh
+      if: github.event.inputs.action == 'instance-refresh'
+      run: |
+        FORCE_FLAG=""
+        if [ "${{ github.event.inputs.force }}" == "true" ]; then
+          FORCE_FLAG="--force"
+        fi
+        
+        echo "🔄 Starting instance refresh for ${{ github.event.inputs.target }} $FORCE_FLAG"
+        ./instance-refresh.sh ${{ github.event.inputs.target }} $FORCE_FLAG
+
+    # Upload Configs
+    - name: Upload Configurations
+      if: github.event.inputs.action == 'upload-configs'
+      run: |
+        echo "📤 Uploading Docker configurations..."
+        ./upload-configs.sh
+
+    # Status Check
+    - name: Status Check
+      if: github.event.inputs.action == 'status-check'
+      run: |
+        echo "🔍 Checking infrastructure status..."
+        ./deploy.sh status
+        ./deploy.sh info
+
+    # Emergency Stop (scale down ASGs)
+    - name: Emergency Stop
+      if: github.event.inputs.action == 'emergency-stop'
+      run: |
+        echo "🛑 Emergency stop - scaling down ASGs..."
+        
+        # Get ASG names
+        FASTAPI_ASG=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='FastAPIASGName'].OutputValue" --output text 2>/dev/null || echo "")
+        GATEWAY_ASG=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='GatewayASGName'].OutputValue" --output text 2>/dev/null || echo "")
+        
+        # Scale down based on target
+        if [ "${{ github.event.inputs.target }}" == "fastapi" ] || [ "${{ github.event.inputs.target }}" == "both" ]; then
+          if [ -n "$FASTAPI_ASG" ]; then
+            echo "Scaling down FastAPI ASG: $FASTAPI_ASG"
+            aws autoscaling update-auto-scaling-group --auto-scaling-group-name "$FASTAPI_ASG" --desired-capacity 0 --min-size 0
+          fi
+        fi
+        
+        if [ "${{ github.event.inputs.target }}" == "gateway" ] || [ "${{ github.event.inputs.target }}" == "both" ]; then
+          if [ -n "$GATEWAY_ASG" ]; then
+            echo "Scaling down Gateway ASG: $GATEWAY_ASG"
+            aws autoscaling update-auto-scaling-group --auto-scaling-group-name "$GATEWAY_ASG" --desired-capacity 0 --min-size 0
+          fi
+        fi
+        
+        echo "⚠️ Services scaled down. Use emergency-start to restore."
+
+    # Emergency Start (scale up ASGs)
+    - name: Emergency Start
+      if: github.event.inputs.action == 'emergency-start'
+      run: |
+        echo "🚀 Emergency start - scaling up ASGs..."
+        
+        # Get ASG names
+        FASTAPI_ASG=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='FastAPIASGName'].OutputValue" --output text 2>/dev/null || echo "")
+        GATEWAY_ASG=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='GatewayASGName'].OutputValue" --output text 2>/dev/null || echo "")
+        
+        # Scale up based on target
+        if [ "${{ github.event.inputs.target }}" == "fastapi" ] || [ "${{ github.event.inputs.target }}" == "both" ]; then
+          if [ -n "$FASTAPI_ASG" ]; then
+            echo "Scaling up FastAPI ASG: $FASTAPI_ASG"
+            aws autoscaling update-auto-scaling-group --auto-scaling-group-name "$FASTAPI_ASG" --desired-capacity 1 --min-size 1 --max-size 1
+          fi
+        fi
+        
+        if [ "${{ github.event.inputs.target }}" == "gateway" ] || [ "${{ github.event.inputs.target }}" == "both" ]; then
+          if [ -n "$GATEWAY_ASG" ]; then
+            echo "Scaling up Gateway ASG: $GATEWAY_ASG"
+            aws autoscaling update-auto-scaling-group --auto-scaling-group-name "$GATEWAY_ASG" --desired-capacity 1 --min-size 1 --max-size 1
+          fi
+        fi
+        
+        echo "⏳ Waiting for instances to become healthy..."
+        sleep 120
+        
+        echo "🔍 Checking service status..."
+        ./deploy.sh status || echo "Status check completed with warnings"
+
+    # Create summary
+    - name: Create Maintenance Summary
+      run: |
+        echo "## 🔧 Maintenance Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Action**: ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Target**: ${{ github.event.inputs.target }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Force**: ${{ github.event.inputs.force }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Timestamp**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Get current status
+        ALB_DNS=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='SwaggerAlbDnsName'].OutputValue" --output text 2>/dev/null || echo "")
+        
+        if [ -n "$ALB_DNS" ]; then
+          echo "### 🌐 Service URLs" >> $GITHUB_STEP_SUMMARY
+          echo "- **FastAPI Health**: http://$ALB_DNS/swagger/api/docs" >> $GITHUB_STEP_SUMMARY
+          echo "- **Gateway Health**: http://$ALB_DNS/swagger/gw/api-docs" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔍 Quick Health Check" >> $GITHUB_STEP_SUMMARY
+          
+          # Quick health check
+          if curl -s -f "http://$ALB_DNS/swagger/api/docs" >/dev/null 2>&1; then
+            echo "- FastAPI: ✅ Healthy" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- FastAPI: ❌ Not responding" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if curl -s -f "http://$ALB_DNS/swagger/gw/api-docs" >/dev/null 2>&1; then
+            echo "- Gateway: ✅ Healthy" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- Gateway: ❌ Not responding" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
