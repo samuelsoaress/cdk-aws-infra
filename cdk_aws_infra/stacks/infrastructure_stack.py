@@ -58,6 +58,14 @@ class InfrastructureStack(Stack):
         self.internal_sg.add_ingress_rule(self.internal_sg, ec2.Port.tcp(8000), "Internal port 8000")
         self.internal_sg.add_ingress_rule(self.internal_sg, ec2.Port.tcp(3000), "Internal port 3000")
         self.internal_sg.add_ingress_rule(self.internal_sg, ec2.Port.all_icmp(), "Internal ICMP")
+        
+        # SSH para debug - permitir de qualquer lugar temporariamente
+        self.internal_sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(22), "SSH for debugging")
+
+        # Key Pair para SSH (criar se não existir)
+        self.key_pair = ec2.CfnKeyPair(self, "DebuggingKeyPair",
+            key_name="cdk-aws-infra-debug-key"
+        )
 
         # Security Group para ALB
         self.alb_sg = ec2.SecurityGroup(self, "SwaggerALBSG",
@@ -273,6 +281,7 @@ class InfrastructureStack(Stack):
             security_group=self.internal_sg,
             user_data=self.fastapi_user_data,
             role=self.ec2_role,
+            key_name=self.key_pair.key_name,  # SSH key para debug
             detailed_monitoring=True,
         )
 
@@ -283,10 +292,11 @@ class InfrastructureStack(Stack):
             security_group=self.internal_sg,
             user_data=self.gateway_user_data,
             role=self.ec2_role,
+            key_name=self.key_pair.key_name,  # SSH key para debug
             detailed_monitoring=True,
         )
 
-        # Auto Scaling Group para FastAPI (capacidade 1)
+        # Auto Scaling Group para FastAPI (capacidade 1, sem rolling updates automáticos)
         self.fastapi_asg = autoscaling.AutoScalingGroup(self, "FastAPIASG",
             vpc=self.vpc,
             launch_template=self.fastapi_lt,
@@ -295,9 +305,13 @@ class InfrastructureStack(Stack):
             desired_capacity=1,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
             health_check=autoscaling.HealthCheck.ec2(grace=Duration.seconds(300)),
+            # Prevenir rolling updates automáticos - apenas via Instance Refresh manual
+            update_policy=autoscaling.UpdatePolicy.replacing_update(
+                warm_up=Duration.seconds(300)
+            ),
         )
 
-        # Auto Scaling Group para Gateway (capacidade 1)
+        # Auto Scaling Group para Gateway (capacidade 1, sem rolling updates automáticos)
         self.gateway_asg = autoscaling.AutoScalingGroup(self, "GatewayASG",
             vpc=self.vpc,
             launch_template=self.gateway_lt,
@@ -306,6 +320,10 @@ class InfrastructureStack(Stack):
             desired_capacity=1,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
             health_check=autoscaling.HealthCheck.ec2(grace=Duration.seconds(300)),
+            # Prevenir rolling updates automáticos - apenas via Instance Refresh manual
+            update_policy=autoscaling.UpdatePolicy.replacing_update(
+                warm_up=Duration.seconds(300)
+            ),
         )
 
         # Configurar políticas de retenção para ASGs
@@ -487,6 +505,17 @@ class InfrastructureStack(Stack):
         CfnOutput(self, "GatewayASGName",
             value=self.gateway_asg.auto_scaling_group_name,
             description="Gateway Auto Scaling Group Name"
+        )
+        
+        # SSH Debug Outputs
+        CfnOutput(self, "SSHKeyName",
+            value=self.key_pair.key_name,
+            description="SSH Key Pair Name for debugging instances"
+        )
+        
+        CfnOutput(self, "SSHInstructions",
+            value="Para SSH: 1) Baixe a private key do console AWS EC2 > Key Pairs, 2) chmod 400 key.pem, 3) ssh -i key.pem ec2-user@<instance-ip>",
+            description="Instructions for SSH access to instances"
         )
 
         if use_eip:

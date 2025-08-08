@@ -307,6 +307,7 @@ show_help() {
     echo "  quick-restart [target]  - Quick restart (fastapi|gateway|both)"
     echo "  status                  - Verificar status dos serviços"
     echo "  info                    - Mostrar informações da stack"
+    echo "  ssh [fastapi|gateway]   - SSH nas instâncias para debug"
     echo "  destroy                 - Destruir infraestrutura"
     echo "  help                    - Mostrar esta ajuda"
     echo ""
@@ -338,6 +339,7 @@ show_help() {
     echo "  $0 deploy-infra --expose-swagger-public true --arch ARM_64"
     echo "  $0 quick-restart fastapi           # ⚡ Restart apenas FastAPI"
     echo "  $0 refresh fastapi                 # 🔄 Refresh completo FastAPI"
+    echo "  $0 ssh fastapi                     # 🔐 SSH na instância FastAPI"
     echo "  $0 status"
 }
 
@@ -404,6 +406,15 @@ main() {
             ;;
         "info")
             show_info
+            ;;
+        "ssh")
+            local target=${2:-"list"}
+            if [[ -f "ssh-connect.sh" ]]; then
+                ./ssh-connect.sh "$target"
+            else
+                log_error "Script ssh-connect.sh não encontrado"
+                exit 1
+            fi
             ;;
         "destroy")
             destroy_infrastructure
