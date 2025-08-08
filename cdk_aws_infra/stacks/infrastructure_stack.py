@@ -2,6 +2,7 @@ from aws_cdk import (
     Stack,
     CfnOutput,
     RemovalPolicy,
+    Duration,
     aws_ec2 as ec2,
     aws_ssm as ssm,
     aws_autoscaling as autoscaling,
@@ -226,8 +227,7 @@ class InfrastructureStack(Stack):
             max_capacity=1,
             desired_capacity=1,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
-            health_check=autoscaling.HealthCheck.elb(grace=300),
-            signals=autoscaling.Signals.wait_for_capacity_timeout(timeout=600),
+            health_check=autoscaling.HealthCheck.ec2(grace=Duration.seconds(300)),
         )
 
         # Auto Scaling Group para Gateway (capacidade 1)
@@ -238,8 +238,7 @@ class InfrastructureStack(Stack):
             max_capacity=1,
             desired_capacity=1,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
-            health_check=autoscaling.HealthCheck.elb(grace=300),
-            signals=autoscaling.Signals.wait_for_capacity_timeout(timeout=600),
+            health_check=autoscaling.HealthCheck.ec2(grace=Duration.seconds(300)),
         )
 
         # Configurar políticas de retenção para ASGs
@@ -258,31 +257,33 @@ class InfrastructureStack(Stack):
         self.fastapi_tg = elbv2.ApplicationTargetGroup(self, "FastAPITG",
             vpc=self.vpc,
             port=8000,
+            protocol=elbv2.ApplicationProtocol.HTTP,
             target_type=elbv2.TargetType.INSTANCE,
             health_check=elbv2.HealthCheck(
                 path="/docs",  # FastAPI Swagger endpoint real
                 healthy_http_codes="200",
-                interval_seconds=30,
-                timeout_seconds=10,
+                interval=Duration.seconds(30),
+                timeout=Duration.seconds(10),
                 healthy_threshold_count=2,
                 unhealthy_threshold_count=3,
             ),
-            deregistration_delay_seconds=30,
+            deregistration_delay=Duration.seconds(30),
         )
 
         self.gateway_tg = elbv2.ApplicationTargetGroup(self, "GatewayTG",
             vpc=self.vpc,
             port=3000,
+            protocol=elbv2.ApplicationProtocol.HTTP,
             target_type=elbv2.TargetType.INSTANCE,
             health_check=elbv2.HealthCheck(
                 path="/api-docs",  # Gateway Swagger endpoint real
                 healthy_http_codes="200",
-                interval_seconds=30,
-                timeout_seconds=10,
+                interval=Duration.seconds(30),
+                timeout=Duration.seconds(10),
                 healthy_threshold_count=2,
                 unhealthy_threshold_count=3,
             ),
-            deregistration_delay_seconds=30,
+            deregistration_delay=Duration.seconds(30),
         )
 
         # Registrar ASGs nos Target Groups
