@@ -308,6 +308,7 @@ show_help() {
     echo "  status                  - Verificar status dos serviços"
     echo "  info                    - Mostrar informações da stack"
     echo "  ssh [fastapi|gateway]   - SSH nas instâncias para debug"
+    echo "  download-ssh-key        - Baixar chave SSH da AWS"
     echo "  destroy                 - Destruir infraestrutura"
     echo "  help                    - Mostrar esta ajuda"
     echo ""
@@ -340,6 +341,7 @@ show_help() {
     echo "  $0 quick-restart fastapi           # ⚡ Restart apenas FastAPI"
     echo "  $0 refresh fastapi                 # 🔄 Refresh completo FastAPI"
     echo "  $0 ssh fastapi                     # 🔐 SSH na instância FastAPI"
+    echo "  $0 download-ssh-key                # 📥 Baixar chave SSH"
     echo "  $0 status"
 }
 
@@ -413,6 +415,14 @@ main() {
                 ./ssh-connect.sh "$target"
             else
                 log_error "Script ssh-connect.sh não encontrado"
+                exit 1
+            fi
+            ;;
+        "download-ssh-key")
+            if [[ -f "download-ssh-key.sh" ]]; then
+                ./download-ssh-key.sh
+            else
+                log_error "Script download-ssh-key.sh não encontrado"
                 exit 1
             fi
             ;;
