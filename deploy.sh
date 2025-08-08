@@ -130,7 +130,10 @@ deploy_infrastructure() {
 
 # Upload configurações e refresh das instâncias
 setup_and_refresh() {
+    local refresh_method=${1:-"instance-refresh"}
+    
     log_header "Configuração e Atualização das Instâncias"
+    log_info "Método de refresh: $refresh_method"
     
     # Upload das configurações
     if [[ -f "upload-configs.sh" ]]; then
@@ -144,13 +147,31 @@ setup_and_refresh() {
     log_info "Aguardando 60s para as instâncias estarem prontas..."
     sleep 60
     
-    # Instance refresh
-    if [[ -f "instance-refresh.sh" ]]; then
-        ./instance-refresh.sh both
-    else
-        log_error "Script instance-refresh.sh não encontrado"
-        return 1
-    fi
+    # Escolher método de refresh
+    case "$refresh_method" in
+        "quick-restart")
+            if [[ -f "quick-restart.sh" ]]; then
+                log_info "🚀 Usando Quick Restart (2-3 min vs 10-15 min)"
+                ./quick-restart.sh both
+            else
+                log_error "Script quick-restart.sh não encontrado"
+                return 1
+            fi
+            ;;
+        "instance-refresh")
+            if [[ -f "instance-refresh.sh" ]]; then
+                log_info "🔄 Usando Instance Refresh (método completo)"
+                ./instance-refresh.sh both
+            else
+                log_error "Script instance-refresh.sh não encontrado"
+                return 1
+            fi
+            ;;
+        *)
+            log_error "Método inválido. Use: quick-restart ou instance-refresh"
+            return 1
+            ;;
+    esac
 }
 
 # Mostrar informações da stack
@@ -278,14 +299,31 @@ show_help() {
     echo ""
     echo "Comandos:"
     echo "  init                    - Configurar ambiente e bootstrap CDK"
-    echo "  deploy                  - Deploy completo (infra + configs + refresh)"
+    echo "  deploy                  - Deploy completo (infra + configs + instance refresh)"
+    echo "  deploy-quick            - Deploy completo com quick restart (🚀 2-3 min vs 10-15 min)"
     echo "  deploy-infra [opts]     - Deploy apenas da infraestrutura"
     echo "  upload-configs          - Upload apenas das configurações Docker"
     echo "  refresh [target]        - Instance refresh (fastapi|gateway|both)"
+    echo "  quick-restart [target]  - Quick restart (fastapi|gateway|both)"
     echo "  status                  - Verificar status dos serviços"
     echo "  info                    - Mostrar informações da stack"
     echo "  destroy                 - Destruir infraestrutura"
     echo "  help                    - Mostrar esta ajuda"
+    echo ""
+    echo "🚀 MÉTODOS DE ATUALIZAÇÃO:"
+    echo "  deploy-quick            - Usa quick-restart (2-3 min, só containers)"
+    echo "  deploy                  - Usa instance-refresh (10-15 min, instâncias completas)"
+    echo ""
+    echo "📋 QUANDO USAR CADA UM:"
+    echo "  Quick Restart:"
+    echo "    ✅ Mudanças apenas no código/configurações"
+    echo "    ✅ Para deploys rápidos em desenvolvimento"
+    echo "    ❌ NÃO aplica mudanças de Launch Template"
+    echo ""
+    echo "  Instance Refresh:"
+    echo "    ✅ Mudanças no Launch Template (user data, AMI, etc)"
+    echo "    ✅ Para deploys de produção/staging"
+    echo "    ✅ Método mais seguro (blue/green)"
     echo ""
     echo "Opções para deploy-infra:"
     echo "  --expose-swagger-public true|false"
@@ -295,9 +333,11 @@ show_help() {
     echo ""
     echo "Exemplos:"
     echo "  $0 init"
-    echo "  $0 deploy"
+    echo "  $0 deploy-quick                    # ⚡ Deploy rápido (recomendado)"
+    echo "  $0 deploy                          # 🔄 Deploy completo"
     echo "  $0 deploy-infra --expose-swagger-public true --arch ARM_64"
-    echo "  $0 refresh fastapi"
+    echo "  $0 quick-restart fastapi           # ⚡ Restart apenas FastAPI"
+    echo "  $0 refresh fastapi                 # 🔄 Refresh completo FastAPI"
     echo "  $0 status"
 }
 
@@ -318,7 +358,14 @@ main() {
             check_dependencies
             setup_python_env
             deploy_infrastructure "$@"
-            setup_and_refresh
+            setup_and_refresh "${2:-instance-refresh}"
+            show_info
+            ;;
+        "deploy-quick")
+            check_dependencies
+            setup_python_env
+            deploy_infrastructure "$@"
+            setup_and_refresh "quick-restart"
             show_info
             ;;
         "deploy-infra")
@@ -335,11 +382,20 @@ main() {
             fi
             ;;
         "refresh")
-            local target=${1:-"both"}
+            local target=${2:-"both"}
             if [[ -f "instance-refresh.sh" ]]; then
-                ./instance-refresh.sh "$target" "$2"
+                ./instance-refresh.sh "$target" "$3"
             else
                 log_error "Script instance-refresh.sh não encontrado"
+                exit 1
+            fi
+            ;;
+        "quick-restart")
+            local target=${2:-"both"}
+            if [[ -f "quick-restart.sh" ]]; then
+                ./quick-restart.sh "$target"
+            else
+                log_error "Script quick-restart.sh não encontrado"
                 exit 1
             fi
             ;;

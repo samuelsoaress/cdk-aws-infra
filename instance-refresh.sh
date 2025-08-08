@@ -64,14 +64,14 @@ start_instance_refresh() {
         fi
     fi
     
-    # Iniciar novo refresh
+    # Iniciar novo refresh (otimizado para velocidade)
     refresh_id=$(aws autoscaling start-instance-refresh \
         --auto-scaling-group-name "$asg_name" \
         --preferences '{
-            "InstanceWarmup": 300,
+            "InstanceWarmup": 120,
             "MinHealthyPercentage": 0,
-            "CheckpointPercentages": [50, 100],
-            "CheckpointDelay": 300
+            "CheckpointPercentages": [100],
+            "CheckpointDelay": 60
         }' \
         --query "InstanceRefreshId" \
         --output text)
