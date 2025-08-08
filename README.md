@@ -275,6 +275,22 @@ sudo docker-compose ps
 
 ## 🔧 Troubleshooting
 
+### Problemas com CDK Synth
+
+#### Erro: `.venv/bin/python: not found`
+O projeto usa um script wrapper (`run-app.sh`) que automaticamente detecta o ambiente:
+- **Local**: Usa `.venv/bin/python` se disponível
+- **CI/CD**: Usa `python3` global com dependências instaladas
+
+Se tiver problemas:
+```bash
+# Testar o script diretamente
+./run-app.sh
+
+# Ou instalar dependências globalmente
+pip3 install -r requirements.txt
+```
+
 ### Instance Refresh Travado
 ```bash
 # Cancelar refresh atual
@@ -337,6 +353,7 @@ Target: both
 
 ```
 ├── app.py                    # CDK App principal
+├── run-app.sh               # Script wrapper para executar CDK
 ├── cdk.json                  # Configuração CDK
 ├── requirements.txt          # Dependências Python
 ├── deploy.sh                 # Script principal de deploy
