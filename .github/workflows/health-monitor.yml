@@ -80,12 +80,16 @@ jobs:
         
         if [ -n "$FASTAPI_ASG" ]; then
           echo "FastAPI ASG Status:"
-          aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$FASTAPI_ASG" --query "AutoScalingGroups[0].[AutoScalingGroupName, DesiredCapacity, Instances[*].[InstanceId, LifecycleState, HealthStatus]]" --output table
+          aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$FASTAPI_ASG" --query "AutoScalingGroups[0].{Name:AutoScalingGroupName,Desired:DesiredCapacity,Min:MinSize,Max:MaxSize,Instances:length(Instances)}" --output table
+          echo "FastAPI Instances:"
+          aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$FASTAPI_ASG" --query "AutoScalingGroups[0].Instances[*].{InstanceId:InstanceId,State:LifecycleState,Health:HealthStatus}" --output table
         fi
         
         if [ -n "$GATEWAY_ASG" ]; then
           echo "Gateway ASG Status:"
-          aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$GATEWAY_ASG" --query "AutoScalingGroups[0].[AutoScalingGroupName, DesiredCapacity, Instances[*].[InstanceId, LifecycleState, HealthStatus]]" --output table
+          aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$GATEWAY_ASG" --query "AutoScalingGroups[0].{Name:AutoScalingGroupName,Desired:DesiredCapacity,Min:MinSize,Max:MaxSize,Instances:length(Instances)}" --output table
+          echo "Gateway Instances:"
+          aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$GATEWAY_ASG" --query "AutoScalingGroups[0].Instances[*].{InstanceId:InstanceId,State:LifecycleState,Health:HealthStatus}" --output table
         fi
         
         # Check Target Group health
