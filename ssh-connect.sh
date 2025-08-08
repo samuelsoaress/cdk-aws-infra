@@ -48,19 +48,29 @@ get_asg_instances() {
         --output text 2>/dev/null || echo ""
 }
 
-# Verificar se key existe
+# Verificar se key existe e baixar do SSM se necessário
 check_ssh_key() {
     local key_name=$1
     local key_file="$key_name.pem"
     
     if [[ ! -f "$key_file" ]]; then
-        log_warn "Arquivo de chave SSH '$key_file' não encontrado."
-        log_info "Para obter a chave privada:"
-        log_info "1. Vá para AWS Console > EC2 > Key Pairs"
-        log_info "2. Encontre a chave '$key_name'"
-        log_info "3. Baixe a private key e salve como '$key_file'"
-        log_info "4. Execute: chmod 400 $key_file"
-        return 1
+        log_info "Chave SSH local não encontrada. Tentando baixar do SSM..."
+        
+        # Tentar baixar do SSM Parameter Store
+        if aws ssm get-parameter --name "/cdk-aws-infra/ssh-private-key" --with-decryption --query "Parameter.Value" --output text > "$key_file" 2>/dev/null; then
+            log_info "✅ Chave SSH baixada do SSM com sucesso!"
+            chmod 400 "$key_file"
+        else
+            log_warn "❌ Não foi possível baixar a chave do SSM."
+            log_info "📋 Alternativas:"
+            log_info "1. Vá para AWS Console > EC2 > Key Pairs"
+            log_info "2. Encontre a chave '$key_name'"
+            log_info "3. Baixe a private key e salve como '$key_file'"
+            log_info "4. Execute: chmod 400 $key_file"
+            log_info ""
+            log_info "🔄 Ou re-deploy a infraestrutura para criar nova chave automaticamente"
+            return 1
+        fi
     fi
     
     # Verificar permissões

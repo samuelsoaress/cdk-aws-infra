@@ -62,9 +62,19 @@ class InfrastructureStack(Stack):
         # SSH para debug - permitir de qualquer lugar temporariamente
         self.internal_sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(22), "SSH for debugging")
 
-        # Key Pair para SSH (criar se não existir)
+        # Key Pair para SSH (criar se não existir) com private key no SSM
         self.key_pair = ec2.CfnKeyPair(self, "DebuggingKeyPair",
-            key_name="cdk-aws-infra-debug-key"
+            key_name="cdk-aws-infra-debug-key",
+            # Salvar private key no SSM Parameter Store
+            public_key_material=None  # CDK vai gerar o par automaticamente
+        )
+        
+        # Salvar private key no SSM para fácil acesso
+        self.ssh_key_parameter = ssm.StringParameter(self, "SSHPrivateKeyParameter",
+            parameter_name="/cdk-aws-infra/ssh-private-key",
+            string_value=self.key_pair.attr_private_key_material,
+            description="Private SSH key for debugging instances",
+            tier=ssm.ParameterTier.STANDARD
         )
 
         # Security Group para ALB
@@ -506,8 +516,13 @@ class InfrastructureStack(Stack):
         )
         
         CfnOutput(self, "SSHInstructions",
-            value="Para SSH: 1) Baixe a private key do console AWS EC2 > Key Pairs, 2) chmod 400 key.pem, 3) ssh -i key.pem ec2-user@<instance-ip>",
+            value="Para SSH: execute './deploy.sh ssh fastapi' ou './deploy.sh ssh gateway' - a chave será baixada automaticamente!",
             description="Instructions for SSH access to instances"
+        )
+        
+        CfnOutput(self, "SSHParameterName",
+            value=self.ssh_key_parameter.parameter_name,
+            description="SSM Parameter containing the SSH private key"
         )
 
         if use_eip:
