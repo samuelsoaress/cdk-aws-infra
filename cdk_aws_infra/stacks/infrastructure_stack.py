@@ -281,7 +281,7 @@ class InfrastructureStack(Stack):
             security_group=self.internal_sg,
             user_data=self.fastapi_user_data,
             role=self.ec2_role,
-            key_name=self.key_pair.key_name,  # SSH key para debug
+            key_pair=ec2.KeyPair.from_key_pair_name(self, "FastAPIKeyPair", self.key_pair.key_name),  # SSH key para debug
             detailed_monitoring=True,
         )
 
@@ -292,11 +292,11 @@ class InfrastructureStack(Stack):
             security_group=self.internal_sg,
             user_data=self.gateway_user_data,
             role=self.ec2_role,
-            key_name=self.key_pair.key_name,  # SSH key para debug
+            key_pair=ec2.KeyPair.from_key_pair_name(self, "GatewayKeyPair", self.key_pair.key_name),  # SSH key para debug
             detailed_monitoring=True,
         )
 
-        # Auto Scaling Group para FastAPI (capacidade 1, sem rolling updates automáticos)
+        # Auto Scaling Group para FastAPI (capacidade 1, controle manual de atualizações)
         self.fastapi_asg = autoscaling.AutoScalingGroup(self, "FastAPIASG",
             vpc=self.vpc,
             launch_template=self.fastapi_lt,
@@ -304,14 +304,10 @@ class InfrastructureStack(Stack):
             max_capacity=1,
             desired_capacity=1,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
-            health_check=autoscaling.HealthCheck.ec2(grace=Duration.seconds(300)),
-            # Prevenir rolling updates automáticos - apenas via Instance Refresh manual
-            update_policy=autoscaling.UpdatePolicy.replacing_update(
-                warm_up=Duration.seconds(300)
-            ),
+            health_check=autoscaling.HealthCheck.elb(grace=Duration.seconds(300)),
         )
 
-        # Auto Scaling Group para Gateway (capacidade 1, sem rolling updates automáticos)
+        # Auto Scaling Group para Gateway (capacidade 1, controle manual de atualizações)
         self.gateway_asg = autoscaling.AutoScalingGroup(self, "GatewayASG",
             vpc=self.vpc,
             launch_template=self.gateway_lt,
@@ -319,11 +315,7 @@ class InfrastructureStack(Stack):
             max_capacity=1,
             desired_capacity=1,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
-            health_check=autoscaling.HealthCheck.ec2(grace=Duration.seconds(300)),
-            # Prevenir rolling updates automáticos - apenas via Instance Refresh manual
-            update_policy=autoscaling.UpdatePolicy.replacing_update(
-                warm_up=Duration.seconds(300)
-            ),
+            health_check=autoscaling.HealthCheck.elb(grace=Duration.seconds(300)),
         )
 
         # Configurar políticas de retenção para ASGs
