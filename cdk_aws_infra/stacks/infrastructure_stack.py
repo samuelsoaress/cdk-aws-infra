@@ -55,9 +55,9 @@ class InfrastructureStack(Stack):
             allow_all_outbound=True
         )
         # Comunicação interna entre membros do SG
-        self.internal_sg.add_ingress_rule(self.internal_sg, ec2.Port.tcp(8000), "Gateway -> API")
-        self.internal_sg.add_ingress_rule(self.internal_sg, ec2.Port.tcp(3000), "API -> Gateway")
-        self.internal_sg.add_ingress_rule(self.internal_sg, ec2.Port.all_icmp(), "ICMP interno")
+        self.internal_sg.add_ingress_rule(self.internal_sg, ec2.Port.tcp(8000), "Internal port 8000")
+        self.internal_sg.add_ingress_rule(self.internal_sg, ec2.Port.tcp(3000), "Internal port 3000")
+        self.internal_sg.add_ingress_rule(self.internal_sg, ec2.Port.all_icmp(), "Internal ICMP")
 
         # Security Group para ALB
         self.alb_sg = ec2.SecurityGroup(self, "SwaggerALBSG",
@@ -83,8 +83,8 @@ class InfrastructureStack(Stack):
                 self.alb_sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(443), "HTTPS")
 
         # Permitir tráfego do ALB para instâncias
-        self.internal_sg.add_ingress_rule(self.alb_sg, ec2.Port.tcp(8000), "ALB -> FastAPI")
-        self.internal_sg.add_ingress_rule(self.alb_sg, ec2.Port.tcp(3000), "ALB -> Gateway")
+        self.internal_sg.add_ingress_rule(self.alb_sg, ec2.Port.tcp(8000), "ALB to FastAPI")
+        self.internal_sg.add_ingress_rule(self.alb_sg, ec2.Port.tcp(3000), "ALB to Gateway")
 
         # IAM Role para instâncias EC2
         self.ec2_role = iam.Role(self, "EC2Role",
