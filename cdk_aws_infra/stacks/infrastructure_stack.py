@@ -178,8 +178,8 @@ class InfrastructureStack(Stack):
             health_check=elbv2.HealthCheck(path="/api-docs", healthy_http_codes="200")
         )
         # Adicionar instâncias como targets
-        self.fastapi_tg.add_target(InstanceTarget(self.fastapi_instance.instance_id, port=8000))
-        self.gateway_tg.add_target(InstanceTarget(self.gateway_instance.instance_id, port=3000))
+        self.fastapi_tg.add_target(InstanceTarget(self.fastapi_instance, port=8000))
+        self.gateway_tg.add_target(InstanceTarget(self.gateway_instance, port=3000))
 
         self.alb_listener = self.swagger_alb.add_listener("HttpListener", port=80, open=expose_swagger_public,
             default_action=elbv2.ListenerAction.fixed_response(404, content_type="text/plain", message_body="Not Found"))
