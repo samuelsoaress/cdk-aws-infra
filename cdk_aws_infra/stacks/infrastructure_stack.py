@@ -54,13 +54,20 @@ class InfrastructureStack(Stack):
         self.internal_sg.add_ingress_rule(self.internal_sg, ec2.Port.all_icmp(), "Internal ICMP")
         self.internal_sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(22), "SSH")
 
-        # KeyPair (customizável). Se reuse_ssh_key=true não cria recurso novo (evita erro de já existente)
+        # KeyPair (customizável)
+        # Problema anterior: CREATE_FAILED quando o nome fixo já existia em outra stack.
+        # Estratégia:
+        #   - Por padrão (reuse_ssh_key=True) apenas referenciamos um KeyPair existente no console/ec2 (não criamos recurso CloudFormation).
+        #   - Se reuse_ssh_key=False criamos um novo KeyPair com sufixo único (addr) para evitar colisão de nomes.
+        base_key_name = ssh_key_name
         if reuse_ssh_key:
-            key_name = ssh_key_name
-            self.key_pair_resource = None
+            key_name = base_key_name
+            self.key_pair_resource = None  # Nenhuma criação -> precisa existir previamente.
         else:
-            self.key_pair_resource = ec2.CfnKeyPair(self, "DebugKeyPair", key_name=ssh_key_name)
-            key_name = ssh_key_name
+            unique_suffix = self.node.addr[:8]
+            generated_key_name = f"{base_key_name}-{unique_suffix}"
+            self.key_pair_resource = ec2.CfnKeyPair(self, "DebugKeyPair", key_name=generated_key_name)
+            key_name = generated_key_name
 
         # SG para ALB (pode ficar ocioso em persistent mode)
         self.alb_sg = ec2.SecurityGroup(self, "SwaggerALBSG",
