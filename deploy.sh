@@ -303,8 +303,8 @@ show_help() {
     echo "  deploy-quick            - Deploy completo com quick restart (🚀 2-3 min vs 10-15 min)"
     echo "  deploy-infra [opts]     - Deploy apenas da infraestrutura"
     echo "  upload-configs          - Upload apenas das configurações Docker"
-    echo "  refresh [target]        - Instance refresh (fastapi|gateway|both)"
-    echo "  quick-restart [target]  - Quick restart (fastapi|gateway|both)"
+    echo "  refresh [target]        - Instance refresh (LEGADO - usar somente em modo não persistente)"
+    echo "  quick-restart [target]  - Quick restart (LEGADO - containers em ASG)"
     echo "  status                  - Verificar status dos serviços"
     echo "  info                    - Mostrar informações da stack"
     echo "  ssh [fastapi|gateway]   - SSH nas instâncias para debug"
@@ -313,16 +313,16 @@ show_help() {
     echo "  help                    - Mostrar esta ajuda"
     echo ""
     echo "🚀 MÉTODOS DE ATUALIZAÇÃO:"
-    echo "  deploy-quick            - Usa quick-restart (2-3 min, só containers)"
-    echo "  deploy                  - Usa instance-refresh (10-15 min, instâncias completas)"
+    echo "  deploy-quick            - (LEGADO ASG) Usa quick-restart (2-3 min, só containers)"
+    echo "  deploy                  - (LEGADO ASG) Usa instance-refresh (10-15 min, instâncias completas)"
     echo ""
     echo "📋 QUANDO USAR CADA UM:"
-    echo "  Quick Restart:"
+    echo "  Quick Restart (LEGADO - só quando persistent_mode=false):" 
     echo "    ✅ Mudanças apenas no código/configurações"
     echo "    ✅ Para deploys rápidos em desenvolvimento"
     echo "    ❌ NÃO aplica mudanças de Launch Template"
     echo ""
-    echo "  Instance Refresh:"
+    echo "  Instance Refresh (LEGADO - só quando persistent_mode=false):" 
     echo "    ✅ Mudanças no Launch Template (user data, AMI, etc)"
     echo "    ✅ Para deploys de produção/staging"
     echo "    ✅ Método mais seguro (blue/green)"
@@ -386,6 +386,7 @@ main() {
             fi
             ;;
         "refresh")
+            log_warn "Comando LEGADO. Use apenas quando a stack foi criada com persistent_mode=false."
             local target=${2:-"both"}
             if [[ -f "instance-refresh.sh" ]]; then
                 ./instance-refresh.sh "$target" "$3"
@@ -395,6 +396,7 @@ main() {
             fi
             ;;
         "quick-restart")
+            log_warn "Comando LEGADO. Disponível apenas em modo ASG (persistent_mode=false)."
             local target=${2:-"both"}
             if [[ -f "quick-restart.sh" ]]; then
                 ./quick-restart.sh "$target"

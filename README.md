@@ -1,17 +1,28 @@
 # CDK AWS Infrastructure
 
-Infraestrutura AWS com CDK para FastAPI e Gateway com arquitetura resiliente baseada em Auto Scaling Groups.
+Infraestrutura AWS com CDK para FastAPI e Gateway.
+
+Agora existem DOIS modos de operação:
+
+1. Modo Persistente (recomendado para desenvolvimento) - instância EC2 única executando ambos os serviços (sem ASG / ALB)
+2. Modo Escalável (legado / produção) - ASGs separados + ALB com path-based routing
 
 ## 🏗️ Arquitetura
 
-### Componentes Principais
+### Componentes (Modo Persistente)
 
-- **VPC**: Rede isolada sem NAT Gateway (somente subnets públicas)
-- **Auto Scaling Groups**: ASG com capacidade 1 para FastAPI e Gateway
-- **Application Load Balancer**: ALB público para acesso ao Swagger
-- **Security Groups**: SG interno compartilhado + SG do ALB
-- **S3**: Bucket para configurações Docker
-- **SSM**: Parameter Store para configurações e State Manager para auto-heal
+- **VPC** pública simples (sem NAT)
+- **EC2 Única** (t4g.medium) rodando FastAPI (porta 8000) e Gateway (porta 3000) via docker-compose
+- **Security Group** com SSH + portas 8000/3000 expostas (pode restringir conforme necessário)
+- **S3** para configs (opcional em dev, ainda suportado)
+- **SSM** para parâmetros / acesso Session Manager
+
+### Componentes (Modo Escalável - Legado)
+
+- **ASGs** separados (FastAPI e Gateway)
+- **ALB** público com regras /swagger/api/* e /swagger/gw/*
+- **Target Groups** com health checks
+- **Instance Refresh** para deploy azul/verde
 
 ### Características de Resiliência
 
@@ -28,7 +39,7 @@ Infraestrutura AWS com CDK para FastAPI e Gateway com arquitetura resiliente bas
 ./deploy.sh init
 ```
 
-### 2. Deploy Completo
+### 2. Deploy Completo (modo persistente rápido)
 
 ```bash
 ./deploy.sh deploy
@@ -42,6 +53,8 @@ Infraestrutura AWS com CDK para FastAPI e Gateway com arquitetura resiliente bas
 
 ## 📋 Comandos Disponíveis
 
+Em modo persistente NÃO há Instance Refresh nem necessidade de quick-restart; basta redeploy / atualizar código e reiniciar containers conforme necessidade.
+
 ### Deploy Principal
 ```bash
 ./deploy.sh <command> [options]
@@ -52,8 +65,8 @@ Infraestrutura AWS com CDK para FastAPI e Gateway com arquitetura resiliente bas
 - `deploy` - Deploy completo (infra + configs + refresh)
 - `deploy-infra [opts]` - Deploy apenas da infraestrutura
 - `upload-configs` - Upload apenas das configurações Docker
-- `refresh [target]` - Instance refresh (fastapi|gateway|both)
-- `status` - Verificar status dos serviços
+- `refresh [target]` - LEGADO (apenas modo escalável)
+- `status` - Verificar status (em modo persistente use a URL direta ou SSH)
 - `info` - Mostrar informações da stack
 - `destroy` - Destruir infraestrutura
 
@@ -81,6 +94,21 @@ Infraestrutura AWS com CDK para FastAPI e Gateway com arquitetura resiliente bas
 
 ## 🚀 CI/CD com GitHub Actions
 
+O workflow principal (`deploy.yml`) agora aceita o parâmetro `persistent_mode` (boolean):
+
+```
+persistent_mode: true  # cria uma única instância dev
+```
+
+Quando `persistent_mode=true`:
+- ASGs/ALB NÃO são criados
+- Um EC2 único com docker-compose sobe ambos os serviços
+- Outputs e parâmetros SSM específicos são gerados:
+  - /infra/cdk/dev/instance-id
+  - /infra/cdk/dev/public-ip
+  - DevFastApiUrl / DevGatewayUrl (Outputs CloudFormation)
+  - /infra/cdk/mode/persistent = true
+
 ### Workflows Disponíveis
 
 #### 1. Deploy Principal (`deploy.yml`)
@@ -93,9 +121,10 @@ Executa automaticamente em push para `main` ou pode ser executado manualmente.
 
 **Parâmetros de Deploy Manual:**
 - `target`: infrastructure | frontend | both | configs-only | refresh-only
-- `instance_refresh`: true/false (forçar refresh após deploy)
-- `expose_swagger_public`: true/false
+- `instance_refresh`: true/false (IGNORADO quando persistent_mode=true)
+- `expose_swagger_public`: true/false (irrelevante em modo persistente porque não há ALB)
 - `arch`: ARM_64 | X86_64
+- `persistent_mode`: true/false
 
 **Exemplo de uso manual:**
 ```
@@ -175,11 +204,8 @@ Cada workflow gera relatórios detalhados com:
 
 ## 🔧 Scripts Auxiliares
 
-### instance-refresh.sh
-Gerencia Instance Refresh dos ASGs:
-```bash
-./instance-refresh.sh [fastapi|gateway|both] [--force]
-```
+### instance-refresh.sh (LEGADO)
+Mantido apenas para compatibilidade quando `persistent_mode=false`.
 
 ### upload-configs.sh
 Faz upload das configurações Docker para S3:
@@ -189,12 +215,13 @@ Faz upload das configurações Docker para S3:
 
 ## 🌐 Endpoints de Acesso
 
-Após o deploy, os serviços estarão disponíveis em:
+Modo Persistente:
+- **FastAPI Health**: `http://<DEV-IP>:8000/health`
+- **Gateway Docs**: `http://<DEV-IP>:3000/api-docs`
 
-- **FastAPI Swagger**: `http://<ALB-DNS>/swagger/api/docs` (FastAPI automático em `/docs`)
-- **Gateway Swagger**: `http://<ALB-DNS>/swagger/gw/api-docs` (configurado em `/api-docs`)
-- **FastAPI Health**: `http://<ALB-DNS>/swagger/api/docs`
-- **Gateway Health**: `http://<ALB-DNS>/swagger/gw/api-docs`
+Modo Escalável (LEGADO):
+- **FastAPI Swagger**: `http://<ALB-DNS>/swagger/api/docs`
+- **Gateway Swagger**: `http://<ALB-DNS>/swagger/gw/api-docs`
 
 ## 🔒 Security Groups
 
@@ -241,7 +268,7 @@ Document para garantir que os serviços Docker estejam sempre rodando.
 - **Gateway**: `t4g.medium` (ARM64)
 - **AMI**: Amazon Linux 2023
 
-## 🔄 Instance Refresh
+## 🔄 Instance Refresh (LEGADO)
 
 ### Estratégia Blue/Green
 - **MinHealthyPercentage**: 0 (permite total replacement)
@@ -249,7 +276,7 @@ Document para garantir que os serviços Docker estejam sempre rodando.
 - **Checkpoints**: 50%, 100%
 - **CheckpointDelay**: 300s
 
-### Quando Ocorre Refresh
+### Quando Ocorre Refresh (somente persistent_mode=false)
 - Mudanças no Launch Template
 - Mudanças na configuração do ASG
 - Execução manual via script
@@ -374,20 +401,12 @@ Target: both
 
 ## 🎯 Objetivos Alcançados
 
-✅ **Atualização sem surpresas**: Instance Refresh controlado  
-✅ **Tipos de instância mantidos**: t4g.micro/medium preservados  
-✅ **ASG com capacidade 1**: Evita múltiplas instâncias  
-✅ **SG interno compartilhado**: Comunicação segura entre serviços  
-✅ **ALB path-based**: Swagger público em `/swagger/api/*` e `/swagger/gw/*`  
-✅ **Persistência automática**: S3 + UserData idempotente  
-✅ **Auto-heal**: SSM State Manager + health checks  
-✅ **Zero SSH exposure**: Session Manager + SGs privados  
-✅ **Parametrização**: Context variables para configuração  
-✅ **Scripts auxiliares**: Automação completa do ciclo de vida  
-✅ **CI/CD completo**: GitHub Actions com deploy automático  
-✅ **Monitoramento automático**: Health checks e auto-recovery  
-✅ **Operações de emergência**: Stop/start via workflows  
-✅ **Relatórios detalhados**: Summaries e alertas automatizados
+✅ **Modo Dev Estável**: Instância única não sofre recriações automáticas  
+✅ **Alternância Fácil**: `-c persistent_mode=true|false` no CDK / workflow  
+✅ **Parâmetros SSM Claros**: /infra/cdk/dev/* para acesso rápido  
+✅ **Still Compatible**: Arquitetura antiga preservada para produção  
+✅ **Deploy Mais Rápido**: Sem Instance Refresh em dev  
+✅ **Documentação Atualizada**  
 
 ## 📝 Notas Importantes
 

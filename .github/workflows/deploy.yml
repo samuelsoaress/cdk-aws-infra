@@ -36,7 +36,11 @@ on:
         options:
         - ARM_64
         - X86_64
-
+      persistent_mode:
+        description: 'Use single persistent dev instance (no ASG/ALB)'
+        required: false
+        default: false
+        type: boolean
 jobs:
   # Job para validação em PRs
   validate:
@@ -68,15 +72,7 @@ jobs:
     - name: CDK Synth
       run: cdk synth
 
-    - name: CDK Diff (if credentials available)
-      if: env.AWS_ACCESS_KEY_ID != ''
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        AWS_REGION: ${{ secrets.AWS_REGION }}
-      run: |
-        aws-actions/configure-aws-credentials@v4
-        cdk diff || echo "No changes detected or stack not deployed"
+  # (Removed CDK Diff step to simplify workflow)
 
   # Job principal de deploy
   deploy:
@@ -115,7 +111,6 @@ jobs:
     - name: Make scripts executable
       run: |
         chmod +x deploy.sh
-        chmod +x instance-refresh.sh
         chmod +x upload-configs.sh
 
     - name: CDK Bootstrap (if needed)
@@ -144,6 +139,10 @@ jobs:
         if [ "${{ github.event.inputs.arch }}" != "" ]; then
           CONTEXT_ARGS="$CONTEXT_ARGS -c arch=${{ github.event.inputs.arch }}"
         fi
+
+        if [ "${{ github.event.inputs.persistent_mode }}" != "" ]; then
+          CONTEXT_ARGS="$CONTEXT_ARGS -c persistent_mode=${{ github.event.inputs.persistent_mode }}"
+        fi
         
         echo "Context args: $CONTEXT_ARGS"
         
@@ -169,13 +168,17 @@ jobs:
 
     # Instance Refresh (se solicitado)
     - name: Instance Refresh
-      if: |
-        (github.event.inputs.instance_refresh == 'true' || github.event.inputs.target == 'refresh-only' || 
-         (github.event.inputs.instance_refresh == '' && github.event_name == 'push')) &&
-        github.event.inputs.target != 'frontend'
+      if: >-
+        (github.event.inputs.instance_refresh == 'true' || github.event.inputs.target == 'refresh-only' ||
+        (github.event.inputs.instance_refresh == '' && github.event_name == 'push')) &&
+        github.event.inputs.target != 'frontend' && github.event.inputs.persistent_mode != 'true'
       run: |
-        echo "Starting instance refresh..."
-        ./instance-refresh.sh both
+        if [ -f ./instance-refresh.sh ]; then
+          echo "Starting instance refresh (legacy ASG mode)..."
+          ./instance-refresh.sh both
+        else
+          echo "Instance refresh skipped: script not present (likely persistent mode setup)"
+        fi
 
     # Verificar status dos serviços
     - name: Check Service Status
@@ -211,6 +214,9 @@ jobs:
         
         # URLs dos serviços
         ALB_DNS=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='SwaggerAlbDnsName'].OutputValue" --output text 2>/dev/null || echo "")
+        DEV_IP=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='DevInstancePublicIp'].OutputValue" --output text 2>/dev/null || echo "")
+        DEV_FASTAPI=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='DevFastApiUrl'].OutputValue" --output text 2>/dev/null || echo "")
+        DEV_GATEWAY=$(aws cloudformation describe-stacks --stack-name InfrastructureStack --query "Stacks[0].Outputs[?OutputKey=='DevGatewayUrl'].OutputValue" --output text 2>/dev/null || echo "")
         
         if [ -n "$ALB_DNS" ]; then
           echo "### 🌐 Service URLs" >> $GITHUB_STEP_SUMMARY
@@ -219,6 +225,17 @@ jobs:
           echo "- **FastAPI Health**: http://$ALB_DNS/swagger/api/docs" >> $GITHUB_STEP_SUMMARY
           echo "- **Gateway Health**: http://$ALB_DNS/swagger/gw/api-docs" >> $GITHUB_STEP_SUMMARY
         fi
+
+        if [ -n "$DEV_IP" ]; then
+          echo "### 🖥️ Dev Instance" >> $GITHUB_STEP_SUMMARY
+          echo "- **Public IP**: $DEV_IP" >> $GITHUB_STEP_SUMMARY
+          if [ -n "$DEV_FASTAPI" ]; then
+            echo "- **FastAPI Health**: $DEV_FASTAPI" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -n "$DEV_GATEWAY" ]; then
+            echo "- **Gateway Docs**: $DEV_GATEWAY" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
         
         # Frontend URL
         FRONTEND_URL=$(aws cloudformation describe-stacks --stack-name FrontendStack --query "Stacks[0].Outputs[?OutputKey=='CloudFrontURL'].OutputValue" --output text 2>/dev/null || echo "")
@@ -226,10 +243,16 @@ jobs:
         if [ -n "$FRONTEND_URL" ]; then
           echo "- **Frontend**: $FRONTEND_URL" >> $GITHUB_STEP_SUMMARY
         fi
-        
+
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### ⚙️ Deploy Parameters" >> $GITHUB_STEP_SUMMARY
-        echo "- **Target**: ${{ github.event.inputs.target || 'both' }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Architecture**: ${{ github.event.inputs.arch || 'ARM_64' }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Swagger Public**: ${{ github.event.inputs.expose_swagger_public || 'true' }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Instance Refresh**: ${{ github.event.inputs.instance_refresh || 'true' }}" >> $GITHUB_STEP_SUMMARY
+        TARGET_INPUT='${{ github.event.inputs.target }}'; [ -z "$TARGET_INPUT" ] && TARGET_INPUT=both
+        ARCH_INPUT='${{ github.event.inputs.arch }}'; [ -z "$ARCH_INPUT" ] && ARCH_INPUT=ARM_64
+        SWAGGER_INPUT='${{ github.event.inputs.expose_swagger_public }}'; [ -z "$SWAGGER_INPUT" ] && SWAGGER_INPUT=true
+        REFRESH_INPUT='${{ github.event.inputs.instance_refresh }}'; [ -z "$REFRESH_INPUT" ] && REFRESH_INPUT=true
+        PERSISTENT_INPUT='${{ github.event.inputs.persistent_mode }}'; [ -z "$PERSISTENT_INPUT" ] && PERSISTENT_INPUT=false
+        echo "- **Target**: $TARGET_INPUT" >> $GITHUB_STEP_SUMMARY
+        echo "- **Architecture**: $ARCH_INPUT" >> $GITHUB_STEP_SUMMARY
+        echo "- **Swagger Public**: $SWAGGER_INPUT" >> $GITHUB_STEP_SUMMARY
+        echo "- **Instance Refresh**: $REFRESH_INPUT" >> $GITHUB_STEP_SUMMARY
+        echo "- **Persistent Mode**: $PERSISTENT_INPUT" >> $GITHUB_STEP_SUMMARY
