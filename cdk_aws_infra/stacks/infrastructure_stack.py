@@ -25,6 +25,8 @@ class InfrastructureStack(Stack):
         restrict_swagger_to_cidr = self.node.try_get_context("restrict_swagger_to_cidr")
         use_eip = self.node.try_get_context("use_eip") or False
         persistent_mode = self.node.try_get_context("persistent_mode") or False
+        ssh_key_name = self.node.try_get_context("ssh_key_name") or "cdk-aws-infra-debug-key"
+        reuse_ssh_key = bool(self.node.try_get_context("reuse_ssh_key"))  # -c reuse_ssh_key=true para não criar CfnKeyPair
 
         # Bucket para configs
         self.config_bucket = s3.Bucket(self, "AppConfigBucket",
@@ -52,8 +54,13 @@ class InfrastructureStack(Stack):
         self.internal_sg.add_ingress_rule(self.internal_sg, ec2.Port.all_icmp(), "Internal ICMP")
         self.internal_sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(22), "SSH")
 
-        # KeyPair
-        self.key_pair = ec2.CfnKeyPair(self, "DebugKeyPair", key_name="cdk-aws-infra-debug-key")
+        # KeyPair (customizável). Se reuse_ssh_key=true não cria recurso novo (evita erro de já existente)
+        if reuse_ssh_key:
+            key_name = ssh_key_name
+            self.key_pair_resource = None
+        else:
+            self.key_pair_resource = ec2.CfnKeyPair(self, "DebugKeyPair", key_name=ssh_key_name)
+            key_name = ssh_key_name
 
         # SG para ALB (pode ficar ocioso em persistent mode)
         self.alb_sg = ec2.SecurityGroup(self, "SwaggerALBSG",
@@ -133,7 +140,7 @@ class InfrastructureStack(Stack):
                 security_group=self.internal_sg,
                 user_data=self.fastapi_user_data,
                 role=self.ec2_role,
-                key_pair=ec2.KeyPair.from_key_pair_name(self, "FastAPIKeyPair", self.key_pair.key_name)
+                key_pair=ec2.KeyPair.from_key_pair_name(self, "FastAPIKeyPair", key_name)
             )
             self.gateway_lt = ec2.LaunchTemplate(self, "GatewayLT",
                 machine_image=self.ami,
@@ -141,7 +148,7 @@ class InfrastructureStack(Stack):
                 security_group=self.internal_sg,
                 user_data=self.gateway_user_data,
                 role=self.ec2_role,
-                key_pair=ec2.KeyPair.from_key_pair_name(self, "GatewayKeyPair", self.key_pair.key_name)
+                key_pair=ec2.KeyPair.from_key_pair_name(self, "GatewayKeyPair", key_name)
             )
             self.fastapi_asg = autoscaling.AutoScalingGroup(self, "FastAPIASG",
                 vpc=self.vpc,
@@ -213,7 +220,7 @@ class InfrastructureStack(Stack):
                 security_group=self.internal_sg,
                 user_data=dev_user_data,
                 role=self.ec2_role,
-                key_pair=ec2.KeyPair.from_key_pair_name(self, "DevKeyPair", self.key_pair.key_name),
+                key_pair=ec2.KeyPair.from_key_pair_name(self, "DevKeyPair", key_name),
                 vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC)
             )
 
@@ -222,7 +229,7 @@ class InfrastructureStack(Stack):
         CfnOutput(self, "VpcId", value=self.vpc.vpc_id)
         CfnOutput(self, "InternalSGId", value=self.internal_sg.security_group_id)
         CfnOutput(self, "ConfigBucketName", value=self.config_bucket.bucket_name)
-        CfnOutput(self, "SSHKeyName", value=self.key_pair.key_name)
+        CfnOutput(self, "SSHKeyName", value=key_name)
 
         if not persistent_mode:
             CfnOutput(self, "SwaggerAlbDnsName", value=self.swagger_alb.load_balancer_dns_name)
@@ -239,7 +246,7 @@ class InfrastructureStack(Stack):
 
         # SSM Parameters
         ssm.StringParameter(self, "ParamConfigBucket", parameter_name="/infra/cdk/config/bucket", string_value=self.config_bucket.bucket_name)
-        ssm.StringParameter(self, "ParamSshKeyName", parameter_name="/infra/cdk/ssh/key-name", string_value=self.key_pair.key_name)
+        ssm.StringParameter(self, "ParamSshKeyName", parameter_name="/infra/cdk/ssh/key-name", string_value=key_name)
         ssm.StringParameter(self, "ParamInternalSg", parameter_name="/infra/cdk/security/internal-sg-id", string_value=self.internal_sg.security_group_id)
         ssm.StringParameter(self, "ParamPersistent", parameter_name="/infra/cdk/mode/persistent", string_value=str(persistent_mode).lower())
         if not persistent_mode:
