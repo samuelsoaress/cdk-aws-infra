@@ -521,3 +521,52 @@ class InfrastructureStack(Stack):
                 value=self.gateway_eip.attr_allocation_id,
                 description="Gateway EIP Allocation ID"
             )
+
+        # ===================== SSM PARAMETERS (para consumo externo) =====================
+        # Cria parâmetros padronizados em /infra/cdk/* usados pelos pipelines dos serviços
+        self.param_config_bucket = ssm.StringParameter(self, "ParamConfigBucket",
+            parameter_name="/infra/cdk/config/bucket",
+            string_value=self.config_bucket.bucket_name
+        )
+        self.param_alb_dns = ssm.StringParameter(self, "ParamAlbDns",
+            parameter_name="/infra/cdk/alb/dns",
+            string_value=self.swagger_alb.load_balancer_dns_name
+        )
+        self.param_fastapi_asg = ssm.StringParameter(self, "ParamFastapiAsg",
+            parameter_name="/infra/cdk/fastapi/asg-name",
+            string_value=self.fastapi_asg.auto_scaling_group_name
+        )
+        self.param_gateway_asg = ssm.StringParameter(self, "ParamGatewayAsg",
+            parameter_name="/infra/cdk/gateway/asg-name",
+            string_value=self.gateway_asg.auto_scaling_group_name
+        )
+        self.param_fastapi_tg = ssm.StringParameter(self, "ParamFastapiTg",
+            parameter_name="/infra/cdk/fastapi/target-group-arn",
+            string_value=self.fastapi_tg.target_group_arn
+        )
+        self.param_gateway_tg = ssm.StringParameter(self, "ParamGatewayTg",
+            parameter_name="/infra/cdk/gateway/target-group-arn",
+            string_value=self.gateway_tg.target_group_arn
+        )
+        self.param_internal_sg = ssm.StringParameter(self, "ParamInternalSg",
+            parameter_name="/infra/cdk/security/internal-sg-id",
+            string_value=self.internal_sg.security_group_id
+        )
+        self.param_alb_sg = ssm.StringParameter(self, "ParamAlbSg",
+            parameter_name="/infra/cdk/security/alb-sg-id",
+            string_value=self.alb_sg.security_group_id
+        )
+        self.param_ssh_key = ssm.StringParameter(self, "ParamSshKeyName",
+            parameter_name="/infra/cdk/ssh/key-name",
+            string_value=self.key_pair.key_name
+        )
+        if use_eip:
+            self.param_fastapi_eip = ssm.StringParameter(self, "ParamFastapiEip",
+                parameter_name="/infra/cdk/eip/fastapi",
+                string_value=self.fastapi_eip.attr_allocation_id
+            )
+            self.param_gateway_eip = ssm.StringParameter(self, "ParamGatewayEip",
+                parameter_name="/infra/cdk/eip/gateway",
+                string_value=self.gateway_eip.attr_allocation_id
+            )
+        # =================== FIM SSM PARAMETERS ===================
