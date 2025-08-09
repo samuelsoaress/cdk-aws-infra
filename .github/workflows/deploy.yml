@@ -166,35 +166,6 @@ jobs:
         echo "Waiting 60s for infrastructure to be ready..."
         sleep 60
 
-    # Instance Refresh (se solicitado)
-    - name: Instance Refresh (legacy ASG only)
-      if: >-
-        (github.event.inputs.instance_refresh == 'true' || github.event.inputs.target == 'refresh-only' ||
-        (github.event.inputs.instance_refresh == '' && github.event_name == 'push')) &&
-        github.event.inputs.target != 'frontend'
-      run: |
-        # Guard 1: explicit workflow input persistent_mode=true
-        if [ "${{ github.event.inputs.persistent_mode }}" = "true" ]; then
-          echo "Skipping instance refresh: persistent_mode input true."
-          exit 0
-        fi
-
-        # Guard 2: detect persistent mode from SSM parameter written by stack
-        PERSISTENT_PARAM=$(aws ssm get-parameter --name /infra/cdk/mode/persistent --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-        if [ "$PERSISTENT_PARAM" = "true" ]; then
-            echo "Skipping instance refresh: stack in persistent (single instance) mode."
-            exit 0
-        fi
-
-        # Guard 3: require script & ASG parameters
-        if [ ! -f ./instance-refresh.sh ]; then
-          echo "Instance refresh script missing -> skipping."
-          exit 0
-        fi
-
-        echo "Starting instance refresh (legacy ASG mode)..."
-        ./instance-refresh.sh both || { echo "Instance refresh failed"; exit 1; }
-
     # Verificar status dos serviços
     - name: Check Service Status
       if: github.event.inputs.target != 'frontend'
