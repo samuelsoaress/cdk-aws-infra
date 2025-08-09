@@ -8,6 +8,7 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_elasticloadbalancingv2 as elbv2,
 )
+from aws_cdk.aws_elasticloadbalancingv2_targets import InstanceTarget
 from constructs import Construct
 
 
@@ -148,6 +149,7 @@ class InfrastructureStack(Stack):
             key_pair=ec2.KeyPair.from_key_pair_name(self, "FastAPIKeyPair", key_name),
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC)
         )
+
         self.gateway_instance = ec2.Instance(self, "GatewayInstance",
             vpc=self.vpc,
             instance_type=ec2.InstanceType("t4g.medium"),
@@ -176,8 +178,9 @@ class InfrastructureStack(Stack):
             health_check=elbv2.HealthCheck(path="/api-docs", healthy_http_codes="200")
         )
         # Adicionar instâncias como targets
-        self.fastapi_tg.add_target(elbv2.InstanceTarget(self.fastapi_instance.instance_id, port=8000))
-        self.gateway_tg.add_target(elbv2.InstanceTarget(self.gateway_instance.instance_id, port=3000))
+        self.fastapi_tg.add_target(InstanceTarget(self.fastapi_instance.instance_id, port=8000))
+        self.gateway_tg.add_target(InstanceTarget(self.gateway_instance.instance_id, port=3000))
+
         self.alb_listener = self.swagger_alb.add_listener("HttpListener", port=80, open=expose_swagger_public,
             default_action=elbv2.ListenerAction.fixed_response(404, content_type="text/plain", message_body="Not Found"))
         self.alb_listener.add_action("FastAPIRule", priority=10,
@@ -187,7 +190,7 @@ class InfrastructureStack(Stack):
             conditions=[elbv2.ListenerCondition.path_patterns(["/swagger/gw/*"])],
             action=elbv2.ListenerAction.forward([self.gateway_tg]))
 
-        # Outputs principais (dentro do __init__)
+        # Outputs principais
         CfnOutput(self, "PersistentMode", value="False", description="Modo duas instâncias fixas (sem ASG)")
         CfnOutput(self, "VpcId", value=self.vpc.vpc_id)
         CfnOutput(self, "InternalSGId", value=self.internal_sg.security_group_id)
@@ -199,7 +202,7 @@ class InfrastructureStack(Stack):
         CfnOutput(self, "FastAPISwaggerUrl", value=f"http://{self.swagger_alb.load_balancer_dns_name}/swagger/api/docs")
         CfnOutput(self, "GatewaySwaggerUrl", value=f"http://{self.swagger_alb.load_balancer_dns_name}/swagger/gw/api-docs")
 
-        # SSM Parameters essenciais (duas instâncias)
+        # SSM Parameters
         ssm.StringParameter(self, "ParamConfigBucket", parameter_name="/infra/cdk/config/bucket", string_value=self.config_bucket.bucket_name)
         ssm.StringParameter(self, "ParamSshKeyName", parameter_name="/infra/cdk/ssh/key-name", string_value=key_name)
         ssm.StringParameter(self, "ParamInternalSg", parameter_name="/infra/cdk/security/internal-sg-id", string_value=self.internal_sg.security_group_id)
