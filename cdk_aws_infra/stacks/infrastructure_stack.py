@@ -15,11 +15,11 @@ class InfrastructureStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         # Context / flags
-    # MODO FIXO: sempre instância única (persistent). Ignora contextos anteriores de ASG/ALB.
-    arch = self.node.try_get_context("arch") or "ARM_64"
-    persistent_mode = True  # fixado
-    ssh_key_name = self.node.try_get_context("ssh_key_name") or "cdk-aws-infra-debug-key"
-    reuse_ssh_key = bool(self.node.try_get_context("reuse_ssh_key"))
+        # MODO FIXO: sempre instância única (persistent). Ignora contextos anteriores de ASG/ALB.
+        arch = self.node.try_get_context("arch") or "ARM_64"
+        persistent_mode = True  # fixado
+        ssh_key_name = self.node.try_get_context("ssh_key_name") or "cdk-aws-infra-debug-key"
+        reuse_ssh_key = bool(self.node.try_get_context("reuse_ssh_key"))
 
         # Bucket para configs
         self.config_bucket = s3.Bucket(self, "AppConfigBucket",
@@ -62,7 +62,7 @@ class InfrastructureStack(Stack):
             self.key_pair_resource = ec2.CfnKeyPair(self, "DebugKeyPair", key_name=generated_key_name)
             key_name = generated_key_name
 
-    # (Removido ALB/ASG path) – somente portas diretas já configuradas acima.
+        # (Removido ALB/ASG path) – somente portas diretas já configuradas acima.
 
         # IAM Role
         self.ec2_role = iam.Role(self, "EC2Role",
@@ -111,21 +111,21 @@ class InfrastructureStack(Stack):
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC)
         )
 
-    # Outputs dev únicos
-    CfnOutput(self, "PersistentMode", value="True", description="Modo instância única fixo")
-    CfnOutput(self, "VpcId", value=self.vpc.vpc_id)
-    CfnOutput(self, "InternalSGId", value=self.internal_sg.security_group_id)
-    CfnOutput(self, "ConfigBucketName", value=self.config_bucket.bucket_name)
-    CfnOutput(self, "SSHKeyName", value=key_name)
-    CfnOutput(self, "DevInstanceId", value=self.dev_instance.instance_id)
-    CfnOutput(self, "DevInstancePublicIp", value=self.dev_instance.instance_public_ip)
-    CfnOutput(self, "DevFastApiUrl", value=f"http://{self.dev_instance.instance_public_ip}:8000/health")
-    CfnOutput(self, "DevGatewayUrl", value=f"http://{self.dev_instance.instance_public_ip}:3000/api-docs")
+        # Outputs dev únicos
+        CfnOutput(self, "PersistentMode", value="True", description="Modo instância única fixo")
+        CfnOutput(self, "VpcId", value=self.vpc.vpc_id)
+        CfnOutput(self, "InternalSGId", value=self.internal_sg.security_group_id)
+        CfnOutput(self, "ConfigBucketName", value=self.config_bucket.bucket_name)
+        CfnOutput(self, "SSHKeyName", value=key_name)
+        CfnOutput(self, "DevInstanceId", value=self.dev_instance.instance_id)
+        CfnOutput(self, "DevInstancePublicIp", value=self.dev_instance.instance_public_ip)
+        CfnOutput(self, "DevFastApiUrl", value=f"http://{self.dev_instance.instance_public_ip}:8000/health")
+        CfnOutput(self, "DevGatewayUrl", value=f"http://{self.dev_instance.instance_public_ip}:3000/api-docs")
 
-    # SSM Parameters essenciais (modo único)
-    ssm.StringParameter(self, "ParamConfigBucket", parameter_name="/infra/cdk/config/bucket", string_value=self.config_bucket.bucket_name)
-    ssm.StringParameter(self, "ParamSshKeyName", parameter_name="/infra/cdk/ssh/key-name", string_value=key_name)
-    ssm.StringParameter(self, "ParamInternalSg", parameter_name="/infra/cdk/security/internal-sg-id", string_value=self.internal_sg.security_group_id)
-    ssm.StringParameter(self, "ParamPersistent", parameter_name="/infra/cdk/mode/persistent", string_value="true")
-    ssm.StringParameter(self, "ParamDevInstanceId", parameter_name="/infra/cdk/dev/instance-id", string_value=self.dev_instance.instance_id)
-    ssm.StringParameter(self, "ParamDevInstancePublicIp", parameter_name="/infra/cdk/dev/public-ip", string_value=self.dev_instance.instance_public_ip)
+        # SSM Parameters essenciais (modo único)
+        ssm.StringParameter(self, "ParamConfigBucket", parameter_name="/infra/cdk/config/bucket", string_value=self.config_bucket.bucket_name)
+        ssm.StringParameter(self, "ParamSshKeyName", parameter_name="/infra/cdk/ssh/key-name", string_value=key_name)
+        ssm.StringParameter(self, "ParamInternalSg", parameter_name="/infra/cdk/security/internal-sg-id", string_value=self.internal_sg.security_group_id)
+        ssm.StringParameter(self, "ParamPersistent", parameter_name="/infra/cdk/mode/persistent", string_value="true")
+        ssm.StringParameter(self, "ParamDevInstanceId", parameter_name="/infra/cdk/dev/instance-id", string_value=self.dev_instance.instance_id)
+        ssm.StringParameter(self, "ParamDevInstancePublicIp", parameter_name="/infra/cdk/dev/public-ip", string_value=self.dev_instance.instance_public_ip)
